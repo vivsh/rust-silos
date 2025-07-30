@@ -1,0 +1,23 @@
+[workspace]
+members = [
+    "rust-silos",
+    "rust-silos-macros"
+]
+resolver = "3"
+
+[workspace.package]
+version = "0.2.5"
+edition = "2024"
+authors = []
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/vivsh/fs-embed"
+description = "Embedding tools for rust projects"
+
+
+[workspace.dependencies]
+proc-macro2 = "1.0"
+quote = "1.0"
+syn = "2.0"
+fs-embed-macros = { path = "fs-embed-macros", version = "0.2.2" }
+rust-silos-macros = { path = "rust-silos-macros", version = "0.2.3" }
+

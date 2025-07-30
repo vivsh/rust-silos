@@ -1,0 +1,21 @@
+
+
+[package]
+name = "rust-silos-macros"
+version.workspace = true
+edition.workspace = true
+description = "Proc-macro for rust-silos: embed directories as static maps at compile time."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/vivsh/fs-embed"
+categories = ["filesystem", "no-std", "embedded", "development-tools::build-utils"]
+keywords = ["embed", "proc-macro", "filesystem", "static", "assets"]
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1.0"
+quote = "1.0"
+syn = "2.0"
+phf = { version = "0.11", features = ["macros"] }
+walkdir = "2.4"
