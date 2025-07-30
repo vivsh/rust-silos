@@ -1,5 +1,5 @@
 
-# Workspace: fs-embed & rust-silos
+# Workspace: rust-silos
 
 
 This workspace contains two crates:
