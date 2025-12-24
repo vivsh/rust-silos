@@ -11,6 +11,9 @@ use syn::{
 };
 use walkdir::WalkDir;
 
+type EmbedMeta = (String, String, usize, u64);
+type CollectResult = (Vec<EmbedMeta>, Vec<proc_macro2::TokenStream>);
+
 /// Internal: Macro input parser for `silo!` macro. Accepts a path and optional force argument.
 /// Path must be a string literal. Force is a bool literal.
 struct SiloMacroInput {
@@ -57,7 +60,12 @@ pub fn embed_silo(input: TokenStream) -> TokenStream {
     if manifest_dir.is_empty() {
         return compile_error("embed_silo!: CARGO_MANIFEST_DIR not set", call_span);
     }
-    let abs_path = Path::new(&manifest_dir).join(&dir_path);
+    let manifest_dir_canon = match Path::new(&manifest_dir).canonicalize() {
+        Ok(p) => p,
+        Err(_) => return compile_error("embed_silo!: failed to resolve CARGO_MANIFEST_DIR", call_span),
+    };
+
+    let abs_path = manifest_dir_canon.join(&dir_path);
     let abs_path = match abs_path.canonicalize() {
         Ok(p) => p,
         Err(_) => {
@@ -71,19 +79,27 @@ pub fn embed_silo(input: TokenStream) -> TokenStream {
         Some(p) => p,
         None => return compile_error("embed_silo!: path must be valid UTF-8", call_span),
     };
-    if !abs_path_str.starts_with(&manifest_dir) {
+
+    // Path-safe containment check (avoid prefix-string bugs like /foo/bar matching /foo/bar2).
+    if !abs_path.starts_with(&manifest_dir_canon) {
         let msg = format!(
             "embed_silo!: directory not found:\n  {}\n  expected to be inside crate root:\n  {}\n  relative path: {}",
-            abs_path_str, manifest_dir, dir_path
+            abs_path_str,
+            manifest_dir_canon.display(),
+            dir_path
         );
         return compile_error(&msg, call_span);
     }
-    let force_embed = force.as_ref().map_or(false, |(_, v)| v.value());
+
+    let force_embed = force.as_ref().is_some_and(|(_, v)| v.value());
     let debug = cfg!(debug_assertions);
     let use_embed = force_embed || !debug;
     let crate_root = crate_path
         .map(|p| quote! { #p })
         .unwrap_or_else(|| quote! { ::rust_silos });
+
+    // Keep a stable absolute root for dynamic fallback and for `into_dynamic()` conversions.
+    let abs_root_lit = syn::LitStr::new(abs_path_str, call_span);
     if use_embed {
         // Generate PHF map at compile time
         let (entries, errors) = collect_embed_entries(abs_path_str, call_span);
@@ -91,7 +107,6 @@ pub fn embed_silo(input: TokenStream) -> TokenStream {
             return quote! { #(#errors)* }.into();
         }
         let phf_pairs = generate_phf_map(&entries, &crate_root);
-        let root = dir_path.clone();
         // Use a hash of the absolute path for uniqueness
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         use std::hash::{Hash, Hasher};
@@ -103,13 +118,13 @@ pub fn embed_silo(input: TokenStream) -> TokenStream {
                 static #map_ident: #crate_root::phf::Map<&'static str, #crate_root::EmbedEntry> = #crate_root::phf::phf_map! {
                     #phf_pairs
                 };
-                #crate_root::Silo::from_embedded(&#map_ident, #root)
+                #crate_root::Silo::from_embedded(&#map_ident, #abs_root_lit)
             }
         };
         expanded.into()
     } else {
         let expanded = quote! {
-            #crate_root::Silo::from_static(#dir_path)
+            #crate_root::Silo::from_static(#abs_root_lit)
         };
         expanded.into()
     }
@@ -119,7 +134,7 @@ pub fn embed_silo(input: TokenStream) -> TokenStream {
 /// Returns (entries, errors):
 ///   - entries: Vec<(relative_path, abs_path, size, modified)>
 ///   - errors: Vec<TokenStream> for compile_error!s
-fn collect_embed_entries(dir: &str, span: proc_macro2::Span) -> (Vec<(String, String, usize, u64)>, Vec<proc_macro2::TokenStream>) {
+fn collect_embed_entries(dir: &str, span: proc_macro2::Span) -> CollectResult {
     let mut entries = Vec::new();
     let mut errors = Vec::new();
     let root = Path::new(dir);
@@ -165,6 +180,9 @@ fn collect_embed_entries(dir: &str, span: proc_macro2::Span) -> (Vec<(String, St
             entries.push((rel_path, abs_path, size, modified));
         }
     }
+
+    // Make builds more reproducible across platforms/filesystems.
+    entries.sort_by(|(a, _, _, _), (b, _, _, _)| a.cmp(b));
     (entries, errors)
 }
 
@@ -179,7 +197,7 @@ fn compile_error<S: AsRef<str>>(msg: S, span: proc_macro2::Span) -> proc_macro::
 
 /// Generates a PHF map token stream from the collected entries.
 /// Used internally by the macro. Expects (rel_path, abs_path, size, modified) tuples.
-fn generate_phf_map(entries: &[(String, String, usize, u64)], crate_root: &proc_macro2::TokenStream) -> proc_macro2::TokenStream {
+fn generate_phf_map(entries: &[EmbedMeta], crate_root: &proc_macro2::TokenStream) -> proc_macro2::TokenStream {
     let pairs = entries.iter().map(|(rel_path, abs_path, size, modified)| {
         let rel_path_lit = syn::LitStr::new(rel_path, proc_macro2::Span::call_site());
         let abs_path_lit = syn::LitStr::new(abs_path, proc_macro2::Span::call_site());

@@ -7,7 +7,7 @@ edition.workspace = true
 license = "MIT OR Apache-2.0"
 description = "Minimal, robust file embedding for Rust. Efficient, allocation-free, and reliable."
 repository.workspace = true
-categories = ["filesystem", "no-std", "embedded", "development-tools::build-utils"]
+categories = ["filesystem", "embedded", "development-tools::build-utils"]
 keywords = ["embed", "filesystem", "include_bytes", "static", "assets"]
 readme = "README.md"
 

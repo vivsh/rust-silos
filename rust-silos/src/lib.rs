@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use thiserror::Error;
 
+pub use rust_silos_macros::embed_silo;
+
 
 /// Error type for file and silo operations.
 #[derive(Debug, Error)]
@@ -32,6 +34,14 @@ pub struct EmbedEntry {
     pub path: &'static str,
     pub contents: &'static [u8],
     pub size: usize,
+    pub modified: u64,
+}
+
+/// Metadata for a file.
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub struct FileMeta {
+    pub size: usize,
+    /// Seconds since UNIX epoch.
     pub modified: u64,
 }
 
@@ -97,6 +107,39 @@ impl File {
     pub fn extension(&self) -> Option<&str> {
         self.path().extension().and_then(|s| s.to_str())
     }
+
+    /// Returns file metadata (size and modified time).
+    ///
+    /// For embedded files, this is compile-time metadata.
+    /// For dynamic files, this reads filesystem metadata.
+    pub fn meta(&self) -> Result<FileMeta, Error> {
+        match &self.inner {
+            FileKind::Embed(embed) => Ok(FileMeta {
+                size: embed.inner.size,
+                modified: embed.inner.modified,
+            }),
+            FileKind::Dynamic(dyn_file) => {
+                let metadata = std::fs::metadata(dyn_file.absolute_path())?;
+                let len = metadata.len();
+                let size = usize::try_from(len).map_err(|_| {
+                    std::io::Error::new(std::io::ErrorKind::InvalidData, "file size overflows usize")
+                })?;
+
+                let mtime = metadata.modified()?;
+                let dur = mtime.duration_since(std::time::UNIX_EPOCH).map_err(|_| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "file modified time is before UNIX epoch",
+                    )
+                })?;
+
+                Ok(FileMeta {
+                    size,
+                    modified: dur.as_secs(),
+                })
+            }
+        }
+    }
 }
 
 /// Files are equal if their relative paths are equal.
@@ -151,6 +194,11 @@ struct DynFile {
     full_path: Arc<str>,
 }
 
+fn normalize_rel_path(path: &str) -> Arc<str> {
+    // Keep paths stable across platforms (Windows uses `\`).
+    Arc::from(path.replace('\\', "/"))
+}
+
 impl DynFile {
     /// root is the base directory where the file is located, and path is the relative path to the file.
     /// Create a new DynFile from absolute and relative paths.
@@ -175,17 +223,32 @@ impl DynFile {
 
 /// Get a dynamic file by its relative path. Returns None if not found or not a file.
 fn get_file_for_root(root: &str, path: &str) -> Option<DynFile> {
-    let pathbuff = Path::new(&*root).join(path);
-    if pathbuff.is_file() {            
-        Some(DynFile::new(Arc::from(pathbuff.to_str()?), Arc::from(path)))
-    } else {
-        None
+    // Security note: this performs a canonicalized path-prefix check to prevent `..` traversal
+    // and symlink escapes when looking up filesystem-backed files.
+    let root_canon = Path::new(root).canonicalize().ok()?;
+    let normalized_rel = normalize_rel_path(path);
+    let joined = root_canon.join(normalized_rel.as_ref());
+
+    let candidate = joined.canonicalize().ok()?;
+    if !candidate.starts_with(&root_canon) {
+        return None;
     }
+    if !candidate.is_file() {
+        return None;
+    }
+
+    let rel_path = candidate
+        .strip_prefix(&root_canon)
+        .ok()?
+        .to_str()?
+        .replace('\\', "/");
+    let full_path = candidate.to_str()?;
+    Some(DynFile::new(Arc::from(full_path), Arc::from(rel_path)))
 }
 
 /// Iterate over all files in the dynamic silo.
 fn iter_root(root: &str) -> impl Iterator<Item = File> {
-    let root_path = PathBuf::from(&*root);
+    let root_path = PathBuf::from(root);
     walkdir::WalkDir::new(&root_path)
         .into_iter()
         .filter_map(move |entry| {
@@ -195,7 +258,7 @@ fn iter_root(root: &str) -> impl Iterator<Item = File> {
                 Some(File {
                     inner: FileKind::Dynamic(DynFile::new(
                         Arc::from(entry.path().to_str()?),
-                        Arc::from(relative_path.to_str()?),
+                        normalize_rel_path(relative_path.to_str()?),
                     )),
                 })
             } else {
@@ -299,7 +362,7 @@ impl Silo {
     /// Returns `self` unchanged if the Silo is already dynamic or static.
     pub fn into_dynamic(self) -> Self {
         match self.inner {
-            InnerSilo::Embed(emb_silo) => Self::from_static(&*emb_silo.root),
+            InnerSilo::Embed(emb_silo) => Self::from_static(emb_silo.root),
             InnerSilo::Static(_) => self,
             InnerSilo::Dynamic(_) => self,
         }
@@ -396,7 +459,7 @@ impl SiloSet {
     /// Iterate all files, yielding only the highest-precedence file for each path.
     pub fn iter_override(&self) -> impl Iterator<Item = File> + '_ {
         let mut history = std::collections::HashSet::new();
-        self.iter().filter(move |file| history.insert(file.clone()) )
+        self.iter().filter(move |file| history.insert(file.clone()))
     }
 }
 

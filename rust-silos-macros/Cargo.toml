@@ -7,7 +7,7 @@ edition.workspace = true
 description = "Proc-macro for rust-silos: embed directories as static maps at compile time."
 license = "MIT OR Apache-2.0"
 repository.workspace = true
-categories = ["filesystem", "no-std", "embedded", "development-tools::build-utils"]
+categories = ["filesystem", "embedded", "development-tools::build-utils"]
 keywords = ["embed", "proc-macro", "filesystem", "static", "assets"]
 
 [lib]

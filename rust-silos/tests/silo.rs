@@ -236,3 +236,38 @@ fn test_dyn_file_subdir() {
     file.reader().unwrap().read_to_string(&mut buf).unwrap();
     assert!(buf.contains("gamma file content"));
 }
+
+/// Tests size/modified accessors for embedded files.
+#[test]
+fn test_file_metadata_accessors_embed() {
+    let silo = embed_silo!("tests/data", force=true);
+    let file = silo.get_file("alpha.txt").unwrap();
+    let meta = file.meta().unwrap();
+    assert!(meta.size > 0);
+    let _ = meta.modified;
+}
+
+/// Tests size/modified accessors for dynamic files.
+#[test]
+fn test_file_metadata_accessors_dynamic() {
+    let silo = Silo::from_static("tests/data");
+    let file = silo.get_file("alpha.txt").unwrap();
+    let meta = file.meta().unwrap();
+    assert!(meta.size > 0);
+    let _ = meta.modified;
+}
+
+#[test]
+fn test_lookup_blocks_traversal() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("root");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("ok.txt"), b"ok").unwrap();
+
+    // Sibling file outside the root.
+    std::fs::write(tmp.path().join("outside.txt"), b"nope").unwrap();
+
+    let silo = Silo::new(root.to_str().unwrap());
+    assert!(silo.get_file("ok.txt").is_some());
+    assert!(silo.get_file("../outside.txt").is_none());
+}

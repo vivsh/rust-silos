@@ -23,6 +23,7 @@ Minimal, robust file embedding for Rust. Efficient and reliable.
 
 ```rust
 use rust_silos::Silo;
+use std::io::Read;
 
 // Embed the "assets" directory at compile time
 static ASSETS: Silo = rust_silos::embed_silo!("assets");
@@ -30,7 +31,8 @@ static ASSETS: Silo = rust_silos::embed_silo!("assets");
 fn main() {
     // Access embedded files by relative path
     if let Some(file) = ASSETS.get_file("logo.png") {
-        let bytes = file.read_bytes().unwrap();
+        let mut bytes = Vec::new();
+        file.reader().unwrap().read_to_end(&mut bytes).unwrap();
         // ... use bytes ...
     }
 }
