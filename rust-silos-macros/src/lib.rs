@@ -115,6 +115,7 @@ pub fn embed_silo(input: TokenStream) -> TokenStream {
         let map_ident = quote::format_ident!("__EMBED_MAP_{:x}", hash);
         let expanded = quote! {
             {
+                use #crate_root::phf;
                 static #map_ident: #crate_root::phf::Map<&'static str, #crate_root::EmbedEntry> = #crate_root::phf::phf_map! {
                     #phf_pairs
                 };
