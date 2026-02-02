@@ -14,7 +14,6 @@ readme = "README.md"
 
 [dependencies]
 thiserror = "1.0"
-phf = { version = "0.11", features = ["macros"] }
 walkdir = "2.4"
 rust-silos-macros = { workspace = true }
 

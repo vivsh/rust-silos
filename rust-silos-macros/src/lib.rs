@@ -1,4 +1,4 @@
-//! Proc-macro for rust-silos: generates a PHF map of static str to EmbedEntry.
+//! Proc-macro for rust-silos: generates a sorted array of entries for fast binary search lookup.
 
 extern crate proc_macro;
 use proc_macro::TokenStream;
@@ -46,7 +46,7 @@ impl Parse for SiloMacroInput {
     }
 }
 
-/// Macro to embed all files in a directory as a PHF map for fast, allocation-free access.
+/// Macro to embed all files in a directory as a sorted array for fast, allocation-free binary search access.
 ///
 /// Usage: `let silo = embed_silo!("assets");` or `let silo = embed_silo!("assets", force = true);`
 /// In debug mode, uses dynamic loading unless `force = true`.
@@ -92,39 +92,56 @@ pub fn embed_silo(input: TokenStream) -> TokenStream {
     }
 
     let force_embed = force.as_ref().is_some_and(|(_, v)| v.value());
-    let debug = cfg!(debug_assertions);
-    let use_embed = force_embed || !debug;
     let crate_root = crate_path
         .map(|p| quote! { #p })
         .unwrap_or_else(|| quote! { ::rust_silos });
 
     // Keep a stable absolute root for dynamic fallback and for `into_dynamic()` conversions.
     let abs_root_lit = syn::LitStr::new(abs_path_str, call_span);
-    if use_embed {
-        // Generate PHF map at compile time
-        let (entries, errors) = collect_embed_entries(abs_path_str, call_span);
-        if !errors.is_empty() {
-            return quote! { #(#errors)* }.into();
-        }
-        let phf_pairs = generate_phf_map(&entries, &crate_root);
-        // Use a hash of the absolute path for uniqueness
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        use std::hash::{Hash, Hasher};
-        abs_path_str.hash(&mut hasher);
-        let hash = hasher.finish();
-        let map_ident = quote::format_ident!("__EMBED_MAP_{:x}", hash);
+
+    // Always collect entries (needed for both embedded and cfg-gated code generation)
+    let (entries, errors) = collect_embed_entries(abs_path_str, call_span);
+    if !errors.is_empty() {
+        return quote! { #(#errors)* }.into();
+    }
+
+    // Generate unique identifier using hash + length for better collision resistance
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    use std::hash::{Hash, Hasher};
+    abs_path_str.hash(&mut hasher);
+    let hash = hasher.finish();
+    let array_ident = quote::format_ident!("__EMBED_ARRAY_{:x}_{}", hash, abs_path_str.len());
+
+    let array_entries = generate_sorted_array(&entries, &crate_root);
+    let entry_count = entries.len();
+
+    if force_embed {
+        // Force embed - always use embedded data regardless of debug/release
         let expanded = quote! {
             {
-                static #map_ident: #crate_root::phf::Map<&'static str, #crate_root::EmbedEntry> = #crate_root::phf::phf_map! {
-                    #phf_pairs
-                };
-                #crate_root::Silo::from_embedded(&#map_ident, #abs_root_lit)
+                static #array_ident: [(&str, #crate_root::EmbedEntry); #entry_count] = [
+                    #array_entries
+                ];
+                #crate_root::Silo::from_embedded(&#array_ident, #abs_root_lit)
             }
         };
         expanded.into()
     } else {
+        // Let consumer's cfg!(debug_assertions) decide at their compile time
         let expanded = quote! {
-            #crate_root::Silo::from_static(#abs_root_lit)
+            {
+                #[cfg(debug_assertions)]
+                let __silo = #crate_root::Silo::from_static(#abs_root_lit);
+
+                #[cfg(not(debug_assertions))]
+                let __silo = {
+                    static #array_ident: [(&str, #crate_root::EmbedEntry); #entry_count] = [
+                        #array_entries
+                    ];
+                    #crate_root::Silo::from_embedded(&#array_ident, #abs_root_lit)
+                };
+                __silo
+            }
         };
         expanded.into()
     }
@@ -165,18 +182,14 @@ fn collect_embed_entries(dir: &str, span: proc_macro2::Span) -> CollectResult {
                     continue;
                 }
             };
-            let size = match fs::metadata(path) {
-                Ok(meta) => meta.len() as usize,
-                Err(_) => 0,
-            };
-            let modified = match fs::metadata(path)
-                .and_then(|m| m.modified())
-                .ok()
+            // Single metadata call for both size and modified time
+            let meta = fs::metadata(path).ok();
+            let size = meta.as_ref().map(|m| m.len() as usize).unwrap_or(0);
+            let modified = meta
+                .and_then(|m| m.modified().ok())
                 .and_then(|mtime| mtime.duration_since(std::time::UNIX_EPOCH).ok())
-            {
-                Some(d) => d.as_secs(),
-                None => 0,
-            };
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
             entries.push((rel_path, abs_path, size, modified));
         }
     }
@@ -195,21 +208,22 @@ fn compile_error<S: AsRef<str>>(msg: S, span: proc_macro2::Span) -> proc_macro::
     tokens.into()
 }
 
-/// Generates a PHF map token stream from the collected entries.
+/// Generates a sorted array of entries for binary search lookup.
 /// Used internally by the macro. Expects (rel_path, abs_path, size, modified) tuples.
-fn generate_phf_map(entries: &[EmbedMeta], crate_root: &proc_macro2::TokenStream) -> proc_macro2::TokenStream {
+/// Entries must already be sorted by rel_path.
+fn generate_sorted_array(entries: &[EmbedMeta], crate_root: &proc_macro2::TokenStream) -> proc_macro2::TokenStream {
     let pairs = entries.iter().map(|(rel_path, abs_path, size, modified)| {
         let rel_path_lit = syn::LitStr::new(rel_path, proc_macro2::Span::call_site());
         let abs_path_lit = syn::LitStr::new(abs_path, proc_macro2::Span::call_site());
         let size_lit = syn::LitInt::new(&size.to_string(), proc_macro2::Span::call_site());
         let mod_lit = syn::LitInt::new(&modified.to_string(), proc_macro2::Span::call_site());
         quote! {
-            #rel_path_lit => #crate_root::EmbedEntry {
+            (#rel_path_lit, #crate_root::EmbedEntry {
                 path: #rel_path_lit,
                 contents: include_bytes!(#abs_path_lit),
                 size: #size_lit,
                 modified: #mod_lit,
-            },
+            }),
         }
     });
     quote! {

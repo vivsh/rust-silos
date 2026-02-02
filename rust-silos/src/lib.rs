@@ -1,6 +1,3 @@
-// Re-export phf_map macro for consumers of rust-silos
-pub use phf::phf_map;
-pub use phf;
 use std::hash::Hash;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
@@ -163,25 +160,29 @@ impl Eq for File {}
 /// Represents a set of embedded files and their root.
 #[derive(Debug, Clone)]
 struct EmbedSilo {
-    map: &'static phf::Map<&'static str, EmbedEntry>,
+    /// Sorted array of (path, entry) pairs for binary search lookup
+    entries: &'static [(&'static str, EmbedEntry)],
     root: &'static str,
 }
 
 impl EmbedSilo {
-    /// Create a new EmbedSilo from a PHF map and root path.
-    pub const fn new(map: &'static phf::Map<&'static str, EmbedEntry>, root: &'static str) -> Self {
-        Self { map, root }
+    /// Create a new EmbedSilo from a sorted array and root path.
+    pub const fn new(entries: &'static [(&'static str, EmbedEntry)], root: &'static str) -> Self {
+        Self { entries, root }
     }
 
-    /// Get an embedded file by its relative path.
+    /// Get an embedded file by its relative path using binary search.
     /// Returns None if not found.
     pub fn get_file(&self, path: &str) -> Option<EmbedFile> {
-        self.map.get(path).map(|entry| EmbedFile { inner: entry })
+        self.entries
+            .binary_search_by_key(&path, |(k, _)| k)
+            .ok()
+            .map(|idx| EmbedFile { inner: &self.entries[idx].1 })
     }
 
     /// Iterate over all embedded files in this silo.
     pub fn iter(&self) -> impl Iterator<Item = File> + '_ {
-        self.map.values().map(|entry| File {
+        self.entries.iter().map(|(_, entry)| File {
             inner: FileKind::Embed(EmbedFile { inner: entry }),
         })
     }
@@ -336,10 +337,10 @@ pub struct Silo {
 impl Silo {
 
     #[doc(hidden)]
-    /// Creates a Silo from an embedded PHF map and root path.
-    pub const fn from_embedded(phf_map: &'static phf::Map<&'static str, EmbedEntry>, root: &'static str) -> Self {
+    /// Creates a Silo from a sorted array of embedded entries and root path.
+    pub const fn from_embedded(entries: &'static [(&'static str, EmbedEntry)], root: &'static str) -> Self {
         Self {
-            inner: InnerSilo::Embed(EmbedSilo::new(phf_map, root)),
+            inner: InnerSilo::Embed(EmbedSilo::new(entries, root)),
         }
     }
 
