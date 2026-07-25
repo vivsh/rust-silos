@@ -1,0 +1,8 @@
+[package]
+name = "rust-silos-renamed-runtime-fixture"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+silo_runtime = { package = "rust-silos", path = "../.." }

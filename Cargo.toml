@@ -1,12 +1,13 @@
 [workspace]
 members = [
     "rust-silos",
-    "rust-silos-macros"
+    "rust-silos-macros",
+    "rust-silos/tests/renamed-runtime-fixture",
 ]
 resolver = "3"
 
 [workspace.package]
-version = "0.3.0"
+version = "0.3.1"
 edition = "2024"
 authors = []
 license = "MIT OR Apache-2.0"
@@ -19,5 +20,4 @@ proc-macro2 = "1.0"
 quote = "1.0"
 syn = "2.0"
 fs-embed-macros = { path = "fs-embed-macros", version = "0.2.2" }
-rust-silos-macros = { path = "rust-silos-macros", version = "0.2.3" }
-
+rust-silos-macros = { path = "rust-silos-macros", version = "0.3.1" }

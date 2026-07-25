@@ -30,14 +30,19 @@ impl Parse for SiloMacroInput {
         let mut crate_path = None;
         while input.peek(Token![,]) {
             input.parse::<Token![,]>()?;
+            if input.peek(Token![crate]) {
+                input.parse::<Token![crate]>()?;
+                input.parse::<Token![=]>()?;
+                let path: syn::Path = input.parse()?;
+                crate_path = Some(path);
+                continue;
+            }
+
             let ident: syn::Ident = input.parse()?;
             input.parse::<Token![=]>()?;
             if ident == "force" {
                 let value: syn::LitBool = input.parse()?;
                 force = Some((ident, value));
-            } else if ident == "crate" {
-                let path: syn::Path = input.parse()?;
-                crate_path = Some(path);
             } else {
                 return Err(syn::Error::new(ident.span(), "Unknown argument to embed_silo!"));
             }
@@ -228,5 +233,24 @@ fn generate_sorted_array(entries: &[EmbedMeta], crate_root: &proc_macro2::TokenS
     });
     quote! {
         #(#pairs)*
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SiloMacroInput;
+    use quote::quote;
+
+    /// Verifies that the reserved `crate` keyword is accepted as the runtime-path option.
+    #[test]
+    fn parses_crate_keyword_as_runtime_path_option() {
+        let input = syn::parse_str::<SiloMacroInput>(
+            r#""assets", force = true, crate = runtime_alias"#,
+        )
+        .expect("the documented crate option should parse");
+
+        let crate_path = input.crate_path.expect("crate option should set the runtime path");
+        assert_eq!(quote!(#crate_path).to_string(), "runtime_alias");
+        assert!(input.force.is_some_and(|(_, value)| value.value));
     }
 }
