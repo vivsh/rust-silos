@@ -1,0 +1,15 @@
+[package]
+name = "rust-silos-macros-impl"
+version = "0.1.0"
+edition.workspace = true
+description = "Reusable embed_silo! expansion support for Rust framework proc macros."
+license.workspace = true
+repository.workspace = true
+categories = ["development-tools::build-utils"]
+keywords = ["embed", "proc-macro", "assets"]
+
+[dependencies]
+proc-macro2.workspace = true
+quote.workspace = true
+syn.workspace = true
+walkdir = "2.4"

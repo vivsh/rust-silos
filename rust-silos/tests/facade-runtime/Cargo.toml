@@ -1,0 +1,9 @@
+[package]
+name = "facade-runtime"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+rust-silos = { path = "../.." }
+rust-silos-facade-macros = { path = "../facade-macros" }
